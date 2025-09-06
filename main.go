@@ -18,6 +18,7 @@ import (
 
 // TODO: improve package organization and use CLI flags
 // TODO: Add MCP for use with coding agents
+// TODO: refactor to use a channel to embed chunks as they are read from the file
 
 const (
 	model = "nomic-embed-text:latest"
@@ -47,29 +48,10 @@ func main() {
 		}
 
 		rootDir := os.Args[1]
-		allDetails, err := parseGoDirectory(rootDir)
+		err := processFiles(db, client, rootDir)
 		if err != nil {
-			fmt.Println("Error walking directory:", err)
+			fmt.Println("error processing files:", err)
 			return
-		}
-
-		for _, detail := range allDetails {
-			fmt.Println("-----")
-			fmt.Println(detail)
-		}
-
-		// Store chunks and get their IDs
-		allDetails, err = storeChunks(db, allDetails)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("stored all %d chunks", len(allDetails))
-
-		// Get embeddings for each chunk and store them
-		err = processChunkEmbeddings(db, client, allDetails)
-		if err != nil {
-			log.Fatal(err)
 		}
 	case "prompt":
 		// prompt := "I am designing another package that needs to update a user's email. Any advice?"
@@ -79,6 +61,28 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+}
+
+func processFiles(db *sql.DB, client *api.Client, path string) error {
+	allDetails, err := parseGoDirectory(path)
+	if err != nil {
+		return fmt.Errorf("error parsing directory: %w", err)
+	}
+
+	// Store chunks and get their IDs
+	allDetails, err = storeChunks(db, allDetails)
+	if err != nil {
+		return fmt.Errorf("error storing chunks: %w", err)
+	}
+
+	// Get embeddings for each chunk and store them
+	err = processChunkEmbeddings(db, client, allDetails)
+	if err != nil {
+		log.Fatal(err)
+		return fmt.Errorf("error processing chunks: %w", err)
+	}
+
+	return nil
 }
 
 type Detail struct {
