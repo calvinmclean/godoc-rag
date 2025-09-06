@@ -15,6 +15,10 @@ import (
 	"github.com/ollama/ollama/api"
 )
 
+// TODO: improve package organization and use CLI flags
+// TODO: Add MCP for use with coding agents
+// TODO: Read from package or file tree
+
 const (
 	model = "nomic-embed-text:latest"
 )
@@ -32,8 +36,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// mode := "chunks"
-	mode := "prompt"
+	mode := "chunks"
+	// mode := "prompt"
 
 	switch mode {
 	case "chunks":
@@ -173,7 +177,17 @@ func parseGoFile(filename string) ([]Detail, error) {
 func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
 	for i, c := range details {
 		var id int
-		err := db.QueryRow("INSERT INTO comment_data (data, package, filename) VALUES ($1, $2, $3) RETURNING id", c.String(), c.Package, c.Filename).Scan(&id)
+		err := db.QueryRow(
+			`INSERT INTO comment_data (data, package, filename, symbol)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (package, filename, symbol)
+			DO UPDATE SET
+				package = EXCLUDED.package,
+				filename = EXCLUDED.filename,
+				symbol = EXCLUDED.symbol
+			RETURNING id`,
+			c.String(), c.Package, c.Filename, c.Symbol,
+		).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("failed to insert chunk %d: %v", i, err)
 		}
@@ -221,8 +235,13 @@ func insertEmbedding(db *sql.DB, chunkID int, vector []float32) error {
 	}
 	arrayLiteral := fmt.Sprintf("[%s]", strings.Join(strVals, ","))
 
-	_, err := db.Exec("INSERT INTO embeddings (id, embedding) VALUES ($1, $2)",
-		chunkID, arrayLiteral)
+	_, err := db.Exec(
+		`INSERT INTO embeddings (id, embedding)
+		VALUES ($1, $2)
+		ON CONFLICT (id) DO UPDATE SET
+			embedding = EXCLUDED.embedding`,
+		chunkID, arrayLiteral,
+	)
 	return err
 }
 
