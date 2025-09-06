@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -17,7 +18,6 @@ import (
 
 // TODO: improve package organization and use CLI flags
 // TODO: Add MCP for use with coding agents
-// TODO: Read from package or file tree
 
 const (
 	model = "nomic-embed-text:latest"
@@ -42,32 +42,32 @@ func main() {
 	switch mode {
 	case "chunks":
 		if len(os.Args) < 2 {
-			fmt.Println("Usage: go run main.go <file.go>")
+			fmt.Println("Usage: go run main.go <directory>")
 			return
 		}
 
-		filename := os.Args[1]
-		details, err := parseGoFile(filename)
+		rootDir := os.Args[1]
+		allDetails, err := parseGoDirectory(rootDir)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Error walking directory:", err)
 			return
 		}
 
-		for _, detail := range details {
+		for _, detail := range allDetails {
 			fmt.Println("-----")
 			fmt.Println(detail)
 		}
 
 		// Store chunks and get their IDs
-		details, err = storeChunks(db, details)
+		allDetails, err = storeChunks(db, allDetails)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		log.Printf("stored all %d chunks", len(details))
+		log.Printf("stored all %d chunks", len(allDetails))
 
 		// Get embeddings for each chunk and store them
-		err = processChunkEmbeddings(db, client, details)
+		err = processChunkEmbeddings(db, client, allDetails)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -115,18 +115,40 @@ func (d Detail) String() string {
 	return d.StringIndent("")
 }
 
-func parseGoFile(filename string) ([]Detail, error) {
+func parseGoDirectory(rootDir string) ([]Detail, error) {
+	var allDetails []Detail
 	fset := token.NewFileSet()
 
-	// Parse with comments
-	node, err := parser.ParseFile(fset, filename, nil, parser.ParseComments)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing file: %w", err)
-	}
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return nil
+		}
 
+		// Parse all Go files in this directory as a package
+		pkgs, err := parser.ParseDir(fset, path, nil, parser.ParseComments)
+		if err != nil {
+			log.Printf("Error parsing directory %s: %v", path, err)
+			return nil
+		}
+
+		// Process each package
+		for pkgName, pkg := range pkgs {
+			// Process each file in the package
+			for filename, file := range pkg.Files {
+				details := parseAstFile(file, pkgName, filename)
+				allDetails = append(allDetails, details...)
+			}
+		}
+		return nil
+	})
+	return allDetails, err
+}
+
+func parseAstFile(node *ast.File, packageName, filename string) []Detail {
 	var result []Detail
-
-	packageName := node.Name.Name
 
 	// Package doc
 	if node.Doc != nil {
@@ -171,7 +193,7 @@ func parseGoFile(filename string) ([]Detail, error) {
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
