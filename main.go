@@ -64,6 +64,7 @@ func main() {
 }
 
 func processFiles(db *sql.DB, client *api.Client, path string) error {
+	// detailChan := make(chan Detail)
 	allDetails, err := parseGoDirectory(path)
 	if err != nil {
 		return fmt.Errorf("error parsing directory: %w", err)
@@ -78,7 +79,6 @@ func processFiles(db *sql.DB, client *api.Client, path string) error {
 	// Get embeddings for each chunk and store them
 	err = processChunkEmbeddings(db, client, allDetails)
 	if err != nil {
-		log.Fatal(err)
 		return fmt.Errorf("error processing chunks: %w", err)
 	}
 
@@ -134,7 +134,6 @@ func parseGoDirectory(rootDir string) ([]Detail, error) {
 		// Parse all Go files in this directory as a package
 		pkgs, err := parser.ParseDir(fset, path, nil, parser.ParseComments)
 		if err != nil {
-			log.Printf("Error parsing directory %s: %v", path, err)
 			return nil
 		}
 
@@ -200,11 +199,10 @@ func parseAstFile(node *ast.File, packageName, filename string) []Detail {
 	return result
 }
 
-func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
-	for i, c := range details {
-		var id int
-		err := db.QueryRow(
-			`INSERT INTO comment_data (data, package, filename, symbol)
+func storeChunk(db *sql.DB, detail Detail) (int, error) {
+	var id int
+	err := db.QueryRow(
+		`INSERT INTO comment_data (data, package, filename, symbol)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (package, filename, symbol)
 			DO UPDATE SET
@@ -212,42 +210,56 @@ func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
 				filename = EXCLUDED.filename,
 				symbol = EXCLUDED.symbol
 			RETURNING id`,
-			c.String(), c.Package, c.Filename, c.Symbol,
-		).Scan(&id)
+		detail.String(), detail.Package, detail.Filename, detail.Symbol,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to insert chunk: %v", err)
+	}
+
+	return id, nil
+}
+
+func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
+	for i, detail := range details {
+		id, err := storeChunk(db, detail)
 		if err != nil {
-			return nil, fmt.Errorf("failed to insert chunk %d: %v", i, err)
+			return nil, err
 		}
 		details[i].id = id
-		log.Printf("Successfully stored chunk %d with ID %d", i, id)
 	}
 
 	return details, nil
 }
 
+func processChunkEmbedding(db *sql.DB, client *api.Client, detail Detail) error {
+	req := api.EmbedRequest{
+		Model: model,
+		Input: detail.String(),
+	}
+
+	resp, err := client.Embed(context.Background(), &req)
+	if err != nil {
+		return fmt.Errorf("failed to generate embedding for chunk: %w", err)
+	}
+
+	if len(resp.Embeddings) != 1 {
+		return fmt.Errorf("unexpected number of embeddings returned for chunk")
+	}
+
+	err = insertEmbedding(db, detail.id, resp.Embeddings[0])
+	if err != nil {
+		return fmt.Errorf("failed to store embedding for chunk: %w", err)
+	}
+
+	return nil
+}
+
 func processChunkEmbeddings(db *sql.DB, client *api.Client, details []Detail) error {
-	for i, c := range details {
-		// Get embedding for the chunk
-		req := api.EmbedRequest{
-			Model: model,
-			Input: c.String(),
-		}
-
-		resp, err := client.Embed(context.Background(), &req)
+	for _, detail := range details {
+		err := processChunkEmbedding(db, client, detail)
 		if err != nil {
-			return fmt.Errorf("failed to generate embedding for chunk %d: %v", i, err)
+			return err
 		}
-
-		if len(resp.Embeddings) != 1 {
-			return fmt.Errorf("unexpected number of embeddings returned for chunk %d", i)
-		}
-
-		// Store the embedding
-		err = insertEmbedding(db, c.id, resp.Embeddings[0])
-		if err != nil {
-			return fmt.Errorf("failed to store embedding for chunk %d: %v", i, err)
-		}
-
-		log.Printf("Successfully processed and stored embedding for chunk %d", i)
 	}
 
 	return nil
