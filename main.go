@@ -18,7 +18,6 @@ import (
 
 // TODO: improve package organization and use CLI flags
 // TODO: Add MCP for use with coding agents
-// TODO: refactor to use a channel to embed chunks as they are read from the file
 
 const (
 	model = "nomic-embed-text:latest"
@@ -64,25 +63,39 @@ func main() {
 }
 
 func processFiles(db *sql.DB, client *api.Client, path string) error {
-	// detailChan := make(chan Detail)
-	allDetails, err := parseGoDirectory(path)
+	detailChan := make(chan Detail)
+	errChan := make(chan error, 1)
+
+	go func() {
+		for detail := range detailChan {
+			// Store chunks and get their IDs
+			id, err := storeChunk(db, detail)
+			if err != nil {
+				errChan <- fmt.Errorf("error storing chunks: %w", err)
+				return
+			}
+			detail.id = id
+
+			// Get embeddings for each chunk and store them
+			err = processChunkEmbedding(db, client, detail)
+			if err != nil {
+				errChan <- fmt.Errorf("error processing chunks: %w", err)
+				return
+			}
+		}
+
+		errChan <- nil
+	}()
+
+	err := parseGoDirectory(path, detailChan)
 	if err != nil {
 		return fmt.Errorf("error parsing directory: %w", err)
 	}
+	close(detailChan)
 
-	// Store chunks and get their IDs
-	allDetails, err = storeChunks(db, allDetails)
-	if err != nil {
-		return fmt.Errorf("error storing chunks: %w", err)
-	}
-
-	// Get embeddings for each chunk and store them
-	err = processChunkEmbeddings(db, client, allDetails)
-	if err != nil {
-		return fmt.Errorf("error processing chunks: %w", err)
-	}
-
-	return nil
+	// errChan is a buffered channel of size 1 and is always used by the goroutine.
+	// This ensures correct synchronization
+	return <-errChan
 }
 
 type Detail struct {
@@ -119,10 +132,8 @@ func (d Detail) String() string {
 	return d.StringIndent("")
 }
 
-func parseGoDirectory(rootDir string) ([]Detail, error) {
-	var allDetails []Detail
+func parseGoDirectory(rootDir string, detailChan chan<- Detail) error {
 	fset := token.NewFileSet()
-
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -141,27 +152,24 @@ func parseGoDirectory(rootDir string) ([]Detail, error) {
 		for pkgName, pkg := range pkgs {
 			// Process each file in the package
 			for filename, file := range pkg.Files {
-				details := parseAstFile(file, pkgName, filename)
-				allDetails = append(allDetails, details...)
+				parseAstFile(file, pkgName, filename, detailChan)
 			}
 		}
 		return nil
 	})
-	return allDetails, err
+	return err
 }
 
-func parseAstFile(node *ast.File, packageName, filename string) []Detail {
-	var result []Detail
-
+func parseAstFile(node *ast.File, packageName, filename string, detailChan chan<- Detail) {
 	// Package doc
 	if node.Doc != nil {
-		result = append(result, Detail{
+		detailChan <- Detail{
 			Type:     "package",
 			Symbol:   packageName,
 			Comment:  node.Doc.Text(),
 			Package:  packageName,
 			Filename: filename,
-		})
+		}
 	}
 
 	// Walk through declarations
@@ -169,34 +177,34 @@ func parseAstFile(node *ast.File, packageName, filename string) []Detail {
 		switch d := decl.(type) {
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					details := getTypeDetail(s, d)
-					details.Package = packageName
-					details.Filename = filename
-					result = append(result, details)
+				s, ok := spec.(*ast.TypeSpec)
+				if !ok || !s.Name.IsExported() {
+					continue
 				}
+				details := getTypeDetail(s, d)
+				details.Package = packageName
+				details.Filename = filename
+				detailChan <- details
 			}
 
 		case *ast.FuncDecl:
-			if d.Doc != nil {
-				symbol := d.Name.Name
-				if d.Recv != nil {
-					recName := getTypeName(d.Recv.List[0].Type)
-					symbol = recName + "." + symbol
-				}
-				result = append(result, Detail{
-					Type:     "function",
-					Symbol:   symbol,
-					Comment:  d.Doc.Text(),
-					Package:  packageName,
-					Filename: filename,
-				})
+			if d.Doc == nil || !d.Name.IsExported() {
+				continue
+			}
+			symbol := d.Name.Name
+			if d.Recv != nil {
+				recName := getTypeName(d.Recv.List[0].Type)
+				symbol = recName + "." + symbol
+			}
+			detailChan <- Detail{
+				Type:     "function",
+				Symbol:   symbol,
+				Comment:  d.Doc.Text(),
+				Package:  packageName,
+				Filename: filename,
 			}
 		}
 	}
-
-	return result
 }
 
 func storeChunk(db *sql.DB, detail Detail) (int, error) {
@@ -217,18 +225,6 @@ func storeChunk(db *sql.DB, detail Detail) (int, error) {
 	}
 
 	return id, nil
-}
-
-func storeChunks(db *sql.DB, details []Detail) ([]Detail, error) {
-	for i, detail := range details {
-		id, err := storeChunk(db, detail)
-		if err != nil {
-			return nil, err
-		}
-		details[i].id = id
-	}
-
-	return details, nil
 }
 
 func processChunkEmbedding(db *sql.DB, client *api.Client, detail Detail) error {
@@ -254,17 +250,6 @@ func processChunkEmbedding(db *sql.DB, client *api.Client, detail Detail) error 
 	return nil
 }
 
-func processChunkEmbeddings(db *sql.DB, client *api.Client, details []Detail) error {
-	for _, detail := range details {
-		err := processChunkEmbedding(db, client, detail)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func insertEmbedding(db *sql.DB, chunkID int, vector []float32) error {
 	// Convert vector to Postgres array literal
 	strVals := make([]string, len(vector))
@@ -284,15 +269,15 @@ func insertEmbedding(db *sql.DB, chunkID int, vector []float32) error {
 }
 
 func getTypeName(t ast.Expr) string {
-	var recvType string
-	if typeIdent, ok := t.(*ast.Ident); ok {
-		recvType = typeIdent.Name
-	} else if starExpr, ok := t.(*ast.StarExpr); ok {
-		if typeIdent, ok := starExpr.X.(*ast.Ident); ok {
-			recvType = "*" + typeIdent.Name
+	switch r := t.(type) {
+	case *ast.Ident:
+		return r.Name
+	case *ast.StarExpr:
+		if typeIdent, ok := r.X.(*ast.Ident); ok {
+			return "*" + typeIdent.Name
 		}
 	}
-	return recvType
+	return ""
 }
 
 func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) Detail {
@@ -321,7 +306,6 @@ func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) Detail {
 	if g.Doc != nil {
 		details.Comment = g.Doc.Text()
 	}
-
 	switch t := s.Type.(type) {
 	case *ast.StructType:
 		for _, field := range t.Fields.List {
