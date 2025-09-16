@@ -8,13 +8,16 @@ import (
 )
 
 var searchTool = &mcp.Tool{
-	Name:        "search",
-	Description: "Perform a semantic search on the Go documentation data", // TODO: improve
+	Name: "search",
+	Description: `Perform semantic search over Go package documentation.
+This tool searches embeddings of Go package docs stored in pgvector to return the most
+relevant code references, explanations, or API details. Use this to understand unfamiliar
+packages, find functions, or resolve coding questions that may be answered by Go documentation.`,
 }
 
 type Input struct {
-	Query string `json:"query" jsonschema:"input to use for semantic search"`
-	Limit int    `json:"limit" jsonschema:"max number of results to get from the search"`
+	Query string `json:"query" jsonschema:"Natural language query about Go code, libraries, or APIs."`
+	Limit int    `json:"limit" jsonschema:"Number of results to get from the search"`
 }
 
 type Data struct {

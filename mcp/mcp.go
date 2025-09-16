@@ -25,7 +25,19 @@ func NewServer(loader Loader) Server {
 	s := Server{
 		loader: loader,
 		server: mcp.NewServer(&mcp.Implementation{Name: "godoc-rag", Version: "v1.0.0"}, &mcp.ServerOptions{
-			Instructions: "", // TODO: add instructon
+			Instructions: `This MCP server provides semantic search capabilities over Go
+package documentation. It parses documentation from both internal projects
+and external Go modules, generates vector embeddings, and stores them in
+pgvector. When queried, the server retrieves the most relevant doc snippets,
+functions, or API descriptions based on semantic similarity.
+
+Use this server to:
+- Look up Go functions, types, methods, and usage examples.
+- Understand external packages or internal APIs without manually browsing docs.
+- Aid code generation by retrieving contextually relevant Go documentation.
+
+The server is not a code executor or compiler; it strictly provides
+semantic search results from the indexed documentation.`,
 		}),
 	}
 	mcp.AddTool(s.server, searchTool, s.semanticSearch)
