@@ -6,6 +6,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/modelcontextprotocol/go-sdk v0.5.0
 	github.com/ollama/ollama v0.11.8
+	github.com/urfave/cli/v3 v3.4.1
 )
 
 require (

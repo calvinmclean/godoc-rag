@@ -3,72 +3,126 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
+	"os"
+
 	"godoc-rag/embedder"
 	"godoc-rag/mcp"
 	"godoc-rag/parser"
 	"godoc-rag/rag"
-	"log"
-	"os"
 
 	_ "github.com/lib/pq"
 	"github.com/ollama/ollama/api"
+	"github.com/urfave/cli/v3"
 )
 
-// TODO: improve package organization and use CLI flags
-
 const (
-	embeddingModel = "nomic-embed-text:latest"
-	queryModel     = "qwen3:8b"
+	defaultEmbeddingModel = "nomic-embed-text:latest"
+	defaultQueryModel     = "qwen3:8b"
+	defaultConnStr        = "postgres://postgres:postgres@localhost:5432/embeddings?sslmode=disable"
+	defaultPrompt         = "I am designing another package that needs to update a user's email. Which files should I look at first?"
 )
 
 func main() {
-	connStr := "postgres://postgres:postgres@localhost:5432/embeddings?sslmode=disable"
-	db, err := sql.Open("postgres", connStr)
-	if err != nil {
-		log.Fatal("Unable to connect:", err)
-	}
-	defer db.Close()
+	var dbConnStr, embeddingModel, queryModel string
+	var db *sql.DB
+	var client *api.Client
+	rootCmd := &cli.Command{
+		Name:        "godoc-rag",
+		Usage:       "RAG tools for Go documentation",
+		Description: "A CLI for embedding, querying, and serving Go documentation using RAG.",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "db",
+				Usage:       "Postgres connection string",
+				Value:       defaultConnStr,
+				Destination: &dbConnStr,
+				Sources:     cli.ValueSourceChain{Chain: []cli.ValueSource{cli.EnvVar("GODOC_RAG_DB")}},
+			},
+			&cli.StringFlag{
+				Name:        "embedding-model",
+				Usage:       "Embedding model name",
+				Value:       defaultEmbeddingModel,
+				Destination: &embeddingModel,
+			},
+			&cli.StringFlag{
+				Name:        "query-model",
+				Usage:       "Query model name",
+				Value:       defaultQueryModel,
+				Destination: &queryModel,
+			},
+		},
+		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
+			var err error
+			db, err = sql.Open("postgres", dbConnStr)
+			if err != nil {
+				return nil, fmt.Errorf("unable to connect: %w", err)
+			}
 
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
+			client, err = api.ClientFromEnvironment()
+			if err != nil {
+				return nil, err
+			}
+
+			return ctx, nil
+		},
+		After: func(ctx context.Context, c *cli.Command) error {
+			return db.Close()
+		},
+		Commands: []*cli.Command{
+			{
+				Name:  "embed",
+				Usage: "Embed chunks from a directory",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "dir",
+						Usage:    "Root directory to parse",
+						Required: true,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					rootDir := cmd.String("dir")
+					p := parser.New(rootDir)
+					e := embedder.New(db, client, p, embeddingModel)
+					if err := e.Embed(ctx); err != nil {
+						return fmt.Errorf("error processing files: %w", err)
+					}
+					log.Print("finished embedding chunks")
+					return nil
+				},
+			},
+			{
+				Name:  "prompt",
+				Usage: "Query with a prompt",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "prompt",
+						Usage: "Prompt to query",
+						Value: defaultPrompt,
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					l := rag.NewLoader(db, client, embeddingModel, queryModel)
+					if err := l.Prompt(cmd.String("prompt")); err != nil {
+						return err
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "mcp",
+				Usage: "Run MCP server",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					l := rag.NewLoader(db, client, embeddingModel, queryModel)
+					s := mcp.NewServer(l)
+					return s.Run()
+				},
+			},
+		},
+	}
+
+	if err := rootCmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
-	}
-
-	mode := "mcp"
-	// mode := "chunks"
-	// mode := "prompt"
-
-	switch mode {
-	case "chunks":
-		if len(os.Args) < 2 {
-			log.Fatal("Usage: go run main.go <directory>")
-			return
-		}
-
-		rootDir := os.Args[1]
-		p := parser.New(rootDir)
-		e := embedder.New(db, client, p, embeddingModel)
-		err := e.Embed(context.Background())
-		if err != nil {
-			log.Fatalf("error processing files: %v", err)
-		}
-
-		log.Print("finished embedding chunks")
-	case "prompt":
-		// prompt := "I am designing another package that needs to update a user's email. Any advice?"
-		prompt := "I am designing another package that needs to update a user's email. Which files should I look at first?"
-		l := rag.NewLoader(db, client, embeddingModel, queryModel)
-		err := l.Prompt(prompt)
-		if err != nil {
-			log.Fatal(err)
-		}
-	case "mcp":
-		l := rag.NewLoader(db, client, embeddingModel, queryModel)
-		s := mcp.NewServer(l)
-
-		err := s.Run()
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
 }
