@@ -12,9 +12,10 @@ import (
 const defaultLimit = 3
 
 type contextResult struct {
-	Context  string
+	Data     string
 	Package  string
 	Filename string
+	Symbol   string
 }
 
 type Loader struct {
@@ -53,7 +54,7 @@ func (l Loader) loadContextFromDB(query string, limit int) ([]contextResult, err
 
 	// Query database for similar chunks using cosine similarity
 	rows, err := l.db.Query(`
-		SELECT c.data, c.package, c.filename
+		SELECT c.data, c.package, c.filename, c.symbol
 		FROM comment_data c
 		JOIN embeddings e ON c.id = e.id
 		ORDER BY embedding <=> $1 LIMIT $2
@@ -66,7 +67,7 @@ func (l Loader) loadContextFromDB(query string, limit int) ([]contextResult, err
 	var results []contextResult
 	for rows.Next() {
 		var c contextResult
-		if err := rows.Scan(&c.Context, &c.Package, &c.Filename); err != nil {
+		if err := rows.Scan(&c.Data, &c.Package, &c.Filename, &c.Symbol); err != nil {
 			return nil, err
 		}
 		results = append(results, c)
@@ -84,8 +85,8 @@ func (l Loader) Prompt(query string) error {
 
 	var ragContext strings.Builder
 	for _, c := range queriedContext {
-		ragContext.WriteString(fmt.Sprintf(`<context package=%q filename=%q>`, c.Package, c.Filename))
-		ragContext.WriteString(c.Context)
+		ragContext.WriteString(fmt.Sprintf(`<context package=%q filename=%q symbol=%q>`, c.Package, c.Filename, c.Symbol))
+		ragContext.WriteString(c.Data)
 		ragContext.WriteString("</context>\n")
 	}
 
