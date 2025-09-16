@@ -2,7 +2,7 @@ package godocrag
 
 import "strings"
 
-// Data is output from the embedded data
+// Data is the representation of data parsed from Go packages
 type Data struct {
 	Type     string // package, function, struct, interface
 	Symbol   string // type name like Person or method like Person.Greet
