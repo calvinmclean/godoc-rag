@@ -1,18 +1,24 @@
-package detail
+package godocrag
 
 import "strings"
 
-type Detail struct {
+// Data is output from the embedded data
+type Data struct {
 	Type     string // package, function, struct, interface
 	Symbol   string // type name like Person or method like Person.Greet
-	Comment  string
+	Data     string
 	Package  string
 	Filename string
 
-	Children []Detail
+	// children is just used during parsing in order to construct nested symbol names
+	children []Data
 }
 
-func (d Detail) StringIndent(indent string) string {
+func (d *Data) AddChild(child Data) {
+	d.children = append(d.children, child)
+}
+
+func (d Data) StringIndent(indent string) string {
 	var sb strings.Builder
 	sb.WriteString(indent)
 	sb.WriteString(d.Type)
@@ -20,9 +26,9 @@ func (d Detail) StringIndent(indent string) string {
 	sb.WriteString(d.Symbol)
 	sb.WriteRune(':')
 	sb.WriteRune(' ')
-	sb.WriteString(strings.TrimSpace(strings.ReplaceAll(d.Comment, "\n", " ")))
+	sb.WriteString(strings.TrimSpace(strings.ReplaceAll(d.Data, "\n", " ")))
 
-	for _, child := range d.Children {
+	for _, child := range d.children {
 		sb.WriteRune('\n')
 		sb.WriteString(child.StringIndent(indent + "  "))
 	}
@@ -30,6 +36,6 @@ func (d Detail) StringIndent(indent string) string {
 	return sb.String()
 }
 
-func (d Detail) String() string {
+func (d Data) String() string {
 	return d.StringIndent("")
 }

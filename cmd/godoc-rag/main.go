@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"godoc-rag/embedder"
+	"godoc-rag/mcp"
 	"godoc-rag/parser"
 	"godoc-rag/rag"
 	"log"
@@ -13,7 +14,6 @@ import (
 )
 
 // TODO: improve package organization and use CLI flags
-// TODO: Add MCP for use with coding agents
 
 const (
 	embeddingModel = "nomic-embed-text:latest"
@@ -33,7 +33,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mode := "chunks"
+	mode := "mcp"
+	// mode := "chunks"
 	// mode := "prompt"
 
 	switch mode {
@@ -50,11 +51,21 @@ func main() {
 		if err != nil {
 			log.Fatalf("error processing files: %v", err)
 		}
+
+		log.Print("finished embedding chunks")
 	case "prompt":
 		// prompt := "I am designing another package that needs to update a user's email. Any advice?"
 		prompt := "I am designing another package that needs to update a user's email. Which files should I look at first?"
 		l := rag.NewLoader(db, client, embeddingModel, queryModel)
 		err := l.Prompt(prompt)
+		if err != nil {
+			log.Fatal(err)
+		}
+	case "mcp":
+		l := rag.NewLoader(db, client, embeddingModel, queryModel)
+		s := mcp.NewServer(l)
+
+		err := s.Run()
 		if err != nil {
 			log.Fatal(err)
 		}

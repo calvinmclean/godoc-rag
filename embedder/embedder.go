@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"strings"
 
-	"godoc-rag/detail"
-
 	"github.com/ollama/ollama/api"
+
+	godocrag "godoc-rag"
 )
 
 type Parser interface {
-	Parse() <-chan detail.Detail
+	Parse() <-chan godocrag.Data
 	Error() error
 }
 
@@ -33,15 +33,15 @@ func New(db *sql.DB, ollamaClient *api.Client, p Parser, model string) Embedder 
 }
 
 func (e Embedder) Embed() error {
-	for detail := range e.p.Parse() {
+	for data := range e.p.Parse() {
 		// Store chunks and get their IDs
-		id, err := e.storeChunk(detail)
+		id, err := e.storeChunk(data)
 		if err != nil {
 			return fmt.Errorf("error storing chunks: %w", err)
 		}
 
 		// Get embeddings for each chunk and store them
-		err = e.processChunkEmbedding(id, detail)
+		err = e.processChunkEmbedding(id, data)
 		if err != nil {
 			return fmt.Errorf("error processing chunks: %w", err)
 		}
@@ -50,18 +50,19 @@ func (e Embedder) Embed() error {
 	return e.p.Error()
 }
 
-func (e Embedder) storeChunk(detail detail.Detail) (int, error) {
+func (e Embedder) storeChunk(data godocrag.Data) (int, error) {
 	var id int
 	err := e.db.QueryRow(
-		`INSERT INTO comment_data (data, package, filename, symbol)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (package, filename, symbol)
+		`INSERT INTO comment_data (data, package, filename, symbol, type)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (package, filename, symbol, type)
 			DO UPDATE SET
 				package = EXCLUDED.package,
 				filename = EXCLUDED.filename,
-				symbol = EXCLUDED.symbol
+				symbol = EXCLUDED.symbol,
+				type = EXCLUDED.type
 			RETURNING id`,
-		detail.String(), detail.Package, detail.Filename, detail.Symbol,
+		data.String(), data.Package, data.Filename, data.Symbol, data.Type,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert chunk: %v", err)
@@ -70,10 +71,10 @@ func (e Embedder) storeChunk(detail detail.Detail) (int, error) {
 	return id, nil
 }
 
-func (e Embedder) processChunkEmbedding(chunkID int, detail detail.Detail) error {
+func (e Embedder) processChunkEmbedding(chunkID int, data godocrag.Data) error {
 	req := api.EmbedRequest{
 		Model: e.model,
-		Input: detail.String(),
+		Input: data.String(),
 	}
 
 	resp, err := e.ollamaClient.Embed(context.Background(), &req)

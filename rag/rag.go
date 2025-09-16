@@ -4,19 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 	"strings"
 
 	"github.com/ollama/ollama/api"
+
+	godocrag "godoc-rag"
 )
 
 const defaultLimit = 3
-
-type contextResult struct {
-	Data     string
-	Package  string
-	Filename string
-	Symbol   string
-}
 
 type Loader struct {
 	db             *sql.DB
@@ -34,7 +30,7 @@ func NewLoader(db *sql.DB, ollamaClient *api.Client, embeddingModel, queryModel 
 	}
 }
 
-func (l Loader) loadContextFromDB(query string, limit int) ([]contextResult, error) {
+func (l Loader) SemanticSearch(query string, limit int) (iter.Seq[godocrag.Data], func() error, error) {
 	req := api.EmbedRequest{
 		Model: l.embeddingModel,
 		Input: query,
@@ -42,7 +38,7 @@ func (l Loader) loadContextFromDB(query string, limit int) ([]contextResult, err
 
 	resp, err := l.ollamaClient.Embed(context.Background(), &req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate embedding for query: %v", err)
+		return nil, nil, fmt.Errorf("failed to generate embedding for query: %v", err)
 	}
 
 	// Convert query vector to Postgres array literal
@@ -54,43 +50,58 @@ func (l Loader) loadContextFromDB(query string, limit int) ([]contextResult, err
 
 	// Query database for similar chunks using cosine similarity
 	rows, err := l.db.Query(`
-		SELECT c.data, c.package, c.filename, c.symbol
+		SELECT c.data, c.package, c.filename, c.symbol, c.type
 		FROM comment_data c
 		JOIN embeddings e ON c.id = e.id
 		ORDER BY embedding <=> $1 LIMIT $2
 	`, queryVector, limit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query similar chunks: %v", err)
-	}
-	defer rows.Close()
-
-	var results []contextResult
-	for rows.Next() {
-		var c contextResult
-		if err := rows.Scan(&c.Data, &c.Package, &c.Filename, &c.Symbol); err != nil {
-			return nil, err
-		}
-		results = append(results, c)
+		return nil, nil, fmt.Errorf("failed to query similar chunks: %v", err)
 	}
 
-	return results, nil
+	var errorResult error
+	return func(yield func(godocrag.Data) bool) {
+			defer rows.Close()
+
+			for rows.Next() {
+				var d godocrag.Data
+				if err := rows.Scan(&d.Data, &d.Package, &d.Filename, &d.Symbol, &d.Type); err != nil {
+					errorResult = err
+					return
+				}
+
+				if !yield(d) {
+					return
+				}
+			}
+
+			if err := rows.Err(); err != nil {
+				errorResult = err
+				return
+			}
+		}, func() error {
+			return errorResult
+		}, nil
 }
 
 func (l Loader) Prompt(query string) error {
-	// Search for relevant chunks
-	queriedContext, err := l.loadContextFromDB(query, defaultLimit)
+	dataIter, getErr, err := l.SemanticSearch(query, defaultLimit)
 	if err != nil {
-		return fmt.Errorf("failed to search chunks: %v", err)
+		return err
 	}
 
 	var ragContext strings.Builder
-	for _, c := range queriedContext {
-		ragContext.WriteString(fmt.Sprintf(`<context package=%q filename=%q symbol=%q>`, c.Package, c.Filename, c.Symbol))
-		ragContext.WriteString(c.Data)
+	for d := range dataIter {
+		ragContext.WriteString(fmt.Sprintf(`<context package=%q filename=%q symbol=%q type=%q>`, d.Package, d.Filename, d.Symbol, d.Type))
+		ragContext.WriteString(d.Data)
 		ragContext.WriteString("</context>\n")
+	}
+	if err := getErr(); err != nil {
+		return err
 	}
 
 	prompt := fmt.Sprintf("<user>%s</user>\n%s", query, ragContext.String())
+	fmt.Println(prompt)
 
 	err = l.ollamaClient.Generate(context.Background(), &api.GenerateRequest{
 		Model:  l.queryModel,

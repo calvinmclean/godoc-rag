@@ -5,21 +5,22 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"godoc-rag/detail"
 	"os"
 	"path/filepath"
 	"strings"
+
+	godocrag "godoc-rag"
 )
 
 type Parser struct {
-	out  chan detail.Detail
+	out  chan godocrag.Data
 	err  error
 	path string
 }
 
 func New(path string) *Parser {
 	return &Parser{
-		out:  make(chan detail.Detail),
+		out:  make(chan godocrag.Data),
 		err:  nil,
 		path: path,
 	}
@@ -29,7 +30,7 @@ func (p Parser) Error() error {
 	return p.err
 }
 
-func (p *Parser) Parse() <-chan detail.Detail {
+func (p *Parser) Parse() <-chan godocrag.Data {
 	go func() {
 		fset := token.NewFileSet()
 		p.err = filepath.Walk(p.path, func(path string, info os.FileInfo, err error) error {
@@ -63,10 +64,10 @@ func (p *Parser) Parse() <-chan detail.Detail {
 func (p Parser) parseAstFile(node *ast.File, packageName, filename string) {
 	// Package doc
 	if node.Doc != nil {
-		p.out <- detail.Detail{
+		p.out <- godocrag.Data{
 			Type:     "package",
 			Symbol:   packageName,
-			Comment:  node.Doc.Text(),
+			Data:     node.Doc.Text(),
 			Package:  packageName,
 			Filename: filename,
 		}
@@ -81,10 +82,10 @@ func (p Parser) parseAstFile(node *ast.File, packageName, filename string) {
 				if !ok || !s.Name.IsExported() {
 					continue
 				}
-				details := getTypeDetail(s, d)
-				details.Package = packageName
-				details.Filename = filename
-				p.out <- details
+				data := getTypeData(s, d)
+				data.Package = packageName
+				data.Filename = filename
+				p.out <- data
 			}
 
 		case *ast.FuncDecl:
@@ -96,10 +97,10 @@ func (p Parser) parseAstFile(node *ast.File, packageName, filename string) {
 				recName := getTypeName(d.Recv.List[0].Type)
 				symbol = recName + "." + symbol
 			}
-			p.out <- detail.Detail{
+			p.out <- godocrag.Data{
 				Type:     "function",
 				Symbol:   symbol,
-				Comment:  d.Doc.Text(),
+				Data:     d.Doc.Text(),
 				Package:  packageName,
 				Filename: filename,
 			}
@@ -119,8 +120,8 @@ func getTypeName(t ast.Expr) string {
 	return ""
 }
 
-func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) detail.Detail {
-	var details detail.Detail
+func getTypeData(s *ast.TypeSpec, g *ast.GenDecl) godocrag.Data {
+	var data godocrag.Data
 
 	typeKind := "type"
 	switch t := s.Type.(type) {
@@ -139,11 +140,11 @@ func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) detail.Detail {
 	case *ast.Ident:
 		typeKind = fmt.Sprintf("alias for %s", t.Name)
 	}
-	details.Type = typeKind
-	details.Symbol = s.Name.Name
+	data.Type = typeKind
+	data.Symbol = s.Name.Name
 
 	if g.Doc != nil {
-		details.Comment = g.Doc.Text()
+		data.Data = g.Doc.Text()
 	}
 	switch t := s.Type.(type) {
 	case *ast.StructType:
@@ -168,10 +169,10 @@ func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) detail.Detail {
 				comment += field.Comment.Text()
 			}
 
-			details.Children = append(details.Children, detail.Detail{
-				Type:    fieldType,
-				Symbol:  fmt.Sprintf("%s.%s", details.Symbol, fieldName),
-				Comment: comment,
+			data.AddChild(godocrag.Data{
+				Type:   fieldType,
+				Symbol: fmt.Sprintf("%s.%s", data.Symbol, fieldName),
+				Data:   comment,
 			})
 		}
 	case *ast.InterfaceType:
@@ -192,13 +193,13 @@ func getTypeDetail(s *ast.TypeSpec, g *ast.GenDecl) detail.Detail {
 				comment += method.Comment.Text()
 			}
 
-			details.Children = append(details.Children, detail.Detail{
-				Type:    "method",
-				Symbol:  fmt.Sprintf("%s.%s", details.Symbol, methodName),
-				Comment: comment,
+			data.AddChild(godocrag.Data{
+				Type:   "method",
+				Symbol: fmt.Sprintf("%s.%s", data.Symbol, methodName),
+				Data:   comment,
 			})
 		}
 	}
 
-	return details
+	return data
 }

@@ -5,8 +5,9 @@ CREATE TABLE IF NOT EXISTS comment_data (
     data     TEXT, -- actual comment data
     package  TEXT, -- package that this is contained by
     filename TEXT, -- filename where this came from
-    symbol TEXT,   -- symbol describing the resource (function name, struct name, etc)
-    UNIQUE(package, filename, symbol)
+    symbol   TEXT, -- symbol describing the resource (function name, struct name, etc.)
+    type     TEXT, -- type of the resource (function, variable, etc.)
+    UNIQUE(package, filename, symbol, type)
 );
 
 CREATE TABLE IF NOT EXISTS embeddings (
