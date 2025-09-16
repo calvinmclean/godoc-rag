@@ -113,9 +113,17 @@ func main() {
 			{
 				Name:  "mcp",
 				Usage: "Run MCP server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "addr",
+						Usage:   "Address to bind MCP server (e.g. :8080)",
+						Value:   ":8080",
+						Sources: cli.ValueSourceChain{Chain: []cli.ValueSource{cli.EnvVar("ADDR")}},
+					},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					l := rag.NewLoader(db, client, embeddingModel, queryModel)
-					s := mcp.NewServer(l)
+					s := mcp.NewServer(l, cmd.String("addr"))
 					return s.Run()
 				},
 			},

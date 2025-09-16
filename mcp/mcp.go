@@ -19,12 +19,14 @@ type Loader interface {
 // Server implements the MCP Server for RAG
 type Server struct {
 	loader Loader
+	addr   string
 	server *mcp.Server
 }
 
-func NewServer(loader Loader) Server {
+func NewServer(loader Loader, addr string) Server {
 	s := Server{
 		loader: loader,
+		addr:   addr,
 		server: mcp.NewServer(&mcp.Implementation{Name: "godoc-rag", Version: "v1.0.0"}, &mcp.ServerOptions{
 			Instructions: `This MCP server provides semantic search capabilities over Go
 package documentation. It parses documentation from both internal projects
@@ -50,5 +52,5 @@ func (s Server) Run() error {
 		return s.server
 	}, nil)
 
-	return http.ListenAndServe(":8080", handler)
+	return http.ListenAndServe(s.addr, handler)
 }
