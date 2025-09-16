@@ -30,13 +30,13 @@ func NewLoader(db *sql.DB, ollamaClient *api.Client, embeddingModel, queryModel 
 	}
 }
 
-func (l Loader) SemanticSearch(query string, limit int) (iter.Seq[godocrag.Data], func() error, error) {
+func (l Loader) SemanticSearch(ctx context.Context, query string, limit int) (iter.Seq[godocrag.Data], func() error, error) {
 	req := api.EmbedRequest{
 		Model: l.embeddingModel,
 		Input: query,
 	}
 
-	resp, err := l.ollamaClient.Embed(context.Background(), &req)
+	resp, err := l.ollamaClient.Embed(ctx, &req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate embedding for query: %v", err)
 	}
@@ -49,7 +49,7 @@ func (l Loader) SemanticSearch(query string, limit int) (iter.Seq[godocrag.Data]
 	queryVector := fmt.Sprintf("[%s]", strings.Join(strVals, ","))
 
 	// Query database for similar chunks using cosine similarity
-	rows, err := l.db.Query(`
+	rows, err := l.db.QueryContext(ctx, `
 		SELECT c.data, c.package, c.filename, c.symbol, c.type
 		FROM comment_data c
 		JOIN embeddings e ON c.id = e.id
@@ -85,7 +85,7 @@ func (l Loader) SemanticSearch(query string, limit int) (iter.Seq[godocrag.Data]
 }
 
 func (l Loader) Prompt(query string) error {
-	dataIter, getErr, err := l.SemanticSearch(query, defaultLimit)
+	dataIter, getErr, err := l.SemanticSearch(context.Background(), query, defaultLimit)
 	if err != nil {
 		return err
 	}

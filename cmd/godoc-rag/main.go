@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"godoc-rag/embedder"
 	"godoc-rag/mcp"
@@ -47,7 +48,7 @@ func main() {
 		rootDir := os.Args[1]
 		p := parser.New(rootDir)
 		e := embedder.New(db, client, p, embeddingModel)
-		err := e.Embed()
+		err := e.Embed(context.Background())
 		if err != nil {
 			log.Fatalf("error processing files: %v", err)
 		}

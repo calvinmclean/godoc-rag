@@ -33,7 +33,7 @@ type Output struct {
 }
 
 func (s Server) semanticSearch(ctx context.Context, req *mcp.CallToolRequest, input Input) (*mcp.CallToolResult, Output, error) {
-	dataIter, getErr, err := s.loader.SemanticSearch(input.Query, input.Limit)
+	dataIter, getErr, err := s.loader.SemanticSearch(ctx, input.Query, input.Limit)
 	if err != nil {
 		return nil, Output{}, fmt.Errorf("error performing search: %w", err)
 	}

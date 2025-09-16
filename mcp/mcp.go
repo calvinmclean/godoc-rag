@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"iter"
 	"net/http"
 
@@ -12,7 +13,7 @@ import (
 // Loader enables the MCP Server to do semantic searches on the embedded data
 type Loader interface {
 	// SemanticSearch is used to search embedded data
-	SemanticSearch(query string, limit int) (iter.Seq[godocrag.Data], func() error, error)
+	SemanticSearch(ctx context.Context, query string, limit int) (iter.Seq[godocrag.Data], func() error, error)
 }
 
 // Server implements the MCP Server for RAG

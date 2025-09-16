@@ -32,16 +32,16 @@ func New(db *sql.DB, ollamaClient *api.Client, p Parser, model string) Embedder 
 	}
 }
 
-func (e Embedder) Embed() error {
+func (e Embedder) Embed(ctx context.Context) error {
 	for data := range e.p.Parse() {
 		// Store chunks and get their IDs
-		id, err := e.storeChunk(data)
+		id, err := e.storeChunk(ctx, data)
 		if err != nil {
 			return fmt.Errorf("error storing chunks: %w", err)
 		}
 
 		// Get embeddings for each chunk and store them
-		err = e.processChunkEmbedding(id, data)
+		err = e.processChunkEmbedding(ctx, id, data)
 		if err != nil {
 			return fmt.Errorf("error processing chunks: %w", err)
 		}
@@ -50,9 +50,9 @@ func (e Embedder) Embed() error {
 	return e.p.Error()
 }
 
-func (e Embedder) storeChunk(data godocrag.Data) (int, error) {
+func (e Embedder) storeChunk(ctx context.Context, data godocrag.Data) (int, error) {
 	var id int
-	err := e.db.QueryRow(
+	err := e.db.QueryRowContext(ctx,
 		`INSERT INTO comment_data (data, package, filename, symbol, type)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (package, filename, symbol, type)
@@ -71,13 +71,13 @@ func (e Embedder) storeChunk(data godocrag.Data) (int, error) {
 	return id, nil
 }
 
-func (e Embedder) processChunkEmbedding(chunkID int, data godocrag.Data) error {
+func (e Embedder) processChunkEmbedding(ctx context.Context, chunkID int, data godocrag.Data) error {
 	req := api.EmbedRequest{
 		Model: e.model,
 		Input: data.String(),
 	}
 
-	resp, err := e.ollamaClient.Embed(context.Background(), &req)
+	resp, err := e.ollamaClient.Embed(ctx, &req)
 	if err != nil {
 		return fmt.Errorf("failed to generate embedding for chunk: %w", err)
 	}
@@ -86,7 +86,7 @@ func (e Embedder) processChunkEmbedding(chunkID int, data godocrag.Data) error {
 		return fmt.Errorf("unexpected number of embeddings returned for chunk")
 	}
 
-	err = e.insertEmbedding(chunkID, resp.Embeddings[0])
+	err = e.insertEmbedding(ctx, chunkID, resp.Embeddings[0])
 	if err != nil {
 		return fmt.Errorf("failed to store embedding for chunk: %w", err)
 	}
@@ -94,7 +94,7 @@ func (e Embedder) processChunkEmbedding(chunkID int, data godocrag.Data) error {
 	return nil
 }
 
-func (e Embedder) insertEmbedding(chunkID int, vector []float32) error {
+func (e Embedder) insertEmbedding(ctx context.Context, chunkID int, vector []float32) error {
 	// Convert vector to Postgres array literal
 	strVals := make([]string, len(vector))
 	for i, v := range vector {
@@ -102,7 +102,7 @@ func (e Embedder) insertEmbedding(chunkID int, vector []float32) error {
 	}
 	arrayLiteral := fmt.Sprintf("[%s]", strings.Join(strVals, ","))
 
-	_, err := e.db.Exec(
+	_, err := e.db.ExecContext(ctx,
 		`INSERT INTO embeddings (id, embedding)
 		VALUES ($1, $2)
 		ON CONFLICT (id) DO UPDATE SET
