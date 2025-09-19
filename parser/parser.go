@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log"
 	"strings"
 
 	godocrag "godoc-rag"
@@ -108,9 +109,11 @@ func getTypeName(t ast.Expr) string {
 	case *ast.Ident:
 		return r.Name
 	case *ast.StarExpr:
-		if typeIdent, ok := r.X.(*ast.Ident); ok {
-			return "*" + typeIdent.Name
-		}
+		return "*" + getTypeName(r.X)
+	case *ast.IndexExpr:
+		return getTypeName(r.X)
+	default:
+		log.Printf("unknown type for getTypeName: %T", r)
 	}
 	return ""
 }
