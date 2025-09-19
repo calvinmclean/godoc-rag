@@ -5,11 +5,11 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 
 	godocrag "godoc-rag"
+
+	"golang.org/x/tools/go/packages"
 )
 
 type Parser struct {
@@ -32,30 +32,25 @@ func (p Parser) Error() error {
 
 func (p *Parser) Parse() <-chan godocrag.Data {
 	go func() {
+		pkgs, err := packages.Load(&packages.Config{
+			Mode: packages.NeedName | packages.NeedFiles,
+		}, p.path)
+		if err != nil {
+			p.err = err
+			return
+		}
+
 		fset := token.NewFileSet()
-		p.err = filepath.Walk(p.path, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if !info.IsDir() {
-				return nil
-			}
-
-			// Parse all Go files in this directory as a package
-			pkgs, err := parser.ParseDir(fset, path, nil, parser.ParseComments)
-			if err != nil {
-				return nil
-			}
-
-			// Process each package
-			for pkgName, pkg := range pkgs {
-				// Process each file in the package
-				for filename, file := range pkg.Files {
-					p.parseAstFile(file, pkgName, filename)
+		for _, pkg := range pkgs {
+			for _, fname := range pkg.GoFiles {
+				f, err := parser.ParseFile(fset, fname, nil, parser.ParseComments)
+				if err != nil {
+					panic(err)
 				}
+				p.parseAstFile(f, pkg.PkgPath, fname)
 			}
-			return nil
-		})
+		}
+
 		close(p.out)
 	}()
 	return p.out
