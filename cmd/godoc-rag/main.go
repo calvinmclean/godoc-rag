@@ -84,6 +84,8 @@ func main() {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					rootDir := cmd.String("dir")
 					p := parser.New(rootDir)
+					// TODO: Instead of passing p to embedder, just pass the channel so I can create multiple
+					// Or maybe I should pass p and N to say how many parallel to run. This is a better API I think
 					e := embedder.New(db, client, p, embeddingModel)
 					if err := e.Embed(ctx); err != nil {
 						return fmt.Errorf("error processing files: %w", err)
@@ -120,10 +122,15 @@ func main() {
 						Value:   ":8080",
 						Sources: cli.ValueSourceChain{Chain: []cli.ValueSource{cli.EnvVar("ADDR")}},
 					},
+					&cli.BoolFlag{
+						Name:  "stdio",
+						Usage: "Run MCP server on stdio",
+						Value: false,
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					l := rag.NewLoader(db, client, embeddingModel, queryModel)
-					s := mcp.NewServer(l, cmd.String("addr"))
+					s := mcp.NewServer(l, cmd.Bool("stdio"), cmd.String("addr"))
 					return s.Run()
 				},
 			},
